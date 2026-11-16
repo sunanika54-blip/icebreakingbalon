@@ -1,0 +1,1128 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BALLOON POP – Pecahkan Balon Pintar</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Family -->
+    <link href="https://fonts.googleapis.com/css2?family=Fredoka+One&family=Quicksand:wght@500;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- MediaPipe Hands & Camera Utils -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            font-family: 'Quicksand', sans-serif;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: manipulation;
+            overflow: hidden;
+        }
+        .font-fredoka {
+            font-family: 'Fredoka One', cursive;
+        }
+
+        /* Animated Sky Background */
+        .sky-bg {
+            background: linear-gradient(180deg, #38bdf8 0%, #7dd3fc 60%, #bae6fd 100%);
+        }
+
+        /* Floating Clouds Animation */
+        .cloud {
+            position: absolute;
+            background: rgba(255, 255, 255, 0.85);
+            border-radius: 50px;
+            animation: moveClouds linear infinite;
+            filter: drop-shadow(0 4px 6px rgba(0,0,0,0.05));
+        }
+        .cloud::before, .cloud::after {
+            content: '';
+            position: absolute;
+            background: rgba(255, 255, 255, 0.85);
+            border-radius: 50%;
+        }
+        @keyframes moveClouds {
+            0% { transform: translateX(-200px); }
+            100% { transform: translateX(100vw); }
+        }
+
+        /* 3D Glossy Balloon Styles */
+        .balloon-wrapper {
+            position: absolute;
+            cursor: pointer;
+            transition: transform 0.1s ease-out;
+            will-change: transform, left, top;
+        }
+        .balloon {
+            width: 110px;
+            height: 130px;
+            border-radius: 50% 50% 50% 50% / 40% 40% 60% 60%;
+            position: relative;
+            box-shadow: inset -12px -12px 20px rgba(0,0,0,0.15), inset 10px 10px 15px rgba(255,255,255,0.7), 0 10px 15px rgba(0,0,0,0.1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            animation: floatSlightly 3s ease-in-out infinite alternate;
+        }
+        .balloon::after {
+            /* Knot at bottom */
+            content: "";
+            position: absolute;
+            bottom: -8px;
+            left: 50%;
+            transform: translateX(-50%);
+            border-left: 7px solid transparent;
+            border-right: 7px solid transparent;
+            border-bottom: 10px solid inherit;
+        }
+        .balloon-string {
+            position: absolute;
+            bottom: -38px;
+            left: 50%;
+            width: 2px;
+            height: 32px;
+            background: rgba(255,255,255,0.7);
+            transform: translateX(-50%);
+        }
+        
+        /* Floating Balloon Animation */
+        @keyframes floatSlightly {
+            0% { transform: translateY(0px) rotate(-3deg); }
+            100% { transform: translateY(-15px) rotate(3deg); }
+        }
+
+        /* Shake animation for incorrect selection */
+        .shake {
+            animation: shake 0.5s cubic-bezier(.36,.07,.19,.97) both;
+        }
+        @keyframes shake {
+            10%, 90% { transform: translate3d(-2px, 0, 0); }
+            20%, 80% { transform: translate3d(4px, 0, 0); }
+            30%, 50%, 70% { transform: translate3d(-6px, 0, 0); }
+            40%, 60% { transform: translate3d(6px, 0, 0); }
+        }
+
+        /* Hand Pointer Overlay */
+        #hand-pointer {
+            position: fixed;
+            pointer-events: none;
+            z-index: 9999;
+            transform: translate(-50%, -50%);
+            transition: width 0.1s, height 0.1s, background-color 0.1s;
+        }
+
+        /* Video Feed Flip */
+        .webcam-flip {
+            transform: scaleX(-1);
+        }
+    </style>
+</head>
+<body class="sky-bg h-screen w-screen overflow-hidden select-none relative">
+
+    <!-- Background Animated Clouds -->
+    <div id="clouds-container" class="absolute inset-0 pointer-events-none z-0 overflow-hidden">
+        <div class="cloud w-36 h-12 top-10" style="animation-duration: 35s; animation-delay: -5s;"></div>
+        <div class="cloud w-48 h-16 top-1/4" style="animation-duration: 45s; animation-delay: -18s;"></div>
+        <div class="cloud w-32 h-10 top-1/2" style="animation-duration: 28s; animation-delay: -10s;"></div>
+        <div class="cloud w-56 h-20 top-3/4" style="animation-duration: 50s; animation-delay: -25s;"></div>
+    </div>
+
+    <!-- Hand Tracking Pointer Indicator -->
+    <div id="hand-pointer" class="hidden flex items-center justify-center w-10 h-10 rounded-full border-4 border-white bg-amber-400 bg-opacity-80 shadow-lg">
+        <div id="pointer-inner" class="w-3 h-3 bg-red-600 rounded-full"></div>
+    </div>
+
+    <!-- Hidden Video & Canvas for MediaPipe Processing -->
+    <video id="webcam-input" class="hidden" playsinline></video>
+    <canvas id="webcam-canvas" class="hidden"></canvas>
+
+    <!-- Canvas for Particle Effects (Pop Effects) -->
+    <canvas id="effects-canvas" class="absolute inset-0 pointer-events-none z-30 w-full h-full"></canvas>
+
+    <!-- UI CONTAINER -->
+    <div class="relative z-10 h-full w-full flex flex-col justify-between">
+        
+        <!-- 1. NAVBAR (TOP BAR) -->
+        <header id="navbar" class="hidden bg-white/80 backdrop-blur-md border-b-4 border-sky-300 px-4 py-2 flex justify-between items-center shadow-md">
+            <!-- Player Info -->
+            <div class="flex items-center space-x-3">
+                <div class="w-10 h-10 rounded-full bg-amber-400 border-2 border-white flex items-center justify-center font-fredoka text-xl text-white shadow">
+                    <i class="fa-solid me-0.5 fa-user"></i>
+                </div>
+                <div>
+                    <div id="nav-player-name" class="font-fredoka text-sky-900 text-lg leading-none">Siswa</div>
+                    <div id="nav-level-tag" class="text-xs font-bold text-sky-600">Level 1</div>
+                </div>
+            </div>
+
+            <!-- Progress Bar Level -->
+            <div class="hidden md:flex flex-col items-center w-1/3">
+                <div class="text-xs font-bold text-sky-800 mb-1" id="progress-label">Kemajuan Level: 1 / 3</div>
+                <div class="w-full bg-sky-200 h-3.5 rounded-full overflow-hidden p-0.5 border border-sky-300">
+                    <div id="level-progress-bar" class="bg-amber-400 h-full rounded-full transition-all duration-300" style="width: 33.3%;"></div>
+                </div>
+            </div>
+
+            <!-- Score, Timer & Sound Controls -->
+            <div class="flex items-center space-x-4">
+                <!-- Score -->
+                <div class="bg-amber-100 border-2 border-amber-400 px-3 py-1 rounded-xl flex items-center space-x-1 shadow-sm">
+                    <i class="fa-solid fa-star text-amber-500 text-lg animate-bounce"></i>
+                    <span id="nav-score" class="font-fredoka text-amber-700 text-xl">0</span>
+                </div>
+                <!-- Timer -->
+                <div class="bg-rose-100 border-2 border-rose-400 px-3 py-1 rounded-xl flex items-center space-x-1 shadow-sm">
+                    <i class="fa-solid fa-clock text-rose-500 text-lg"></i>
+                    <span id="nav-timer" class="font-fredoka text-rose-700 text-xl">00</span>
+                </div>
+                <!-- Mute Toggle Button -->
+                <button id="btn-sound-toggle" onclick="toggleSound()" title="Suara" class="w-10 h-10 bg-sky-100 hover:bg-sky-200 border-2 border-sky-400 text-sky-700 rounded-xl flex items-center justify-center transition active:scale-95">
+                    <i id="sound-icon" class="fa-solid fa-volume-high text-lg"></i>
+                </button>
+                <!-- Pause Toggle Button -->
+                <button id="btn-pause-toggle" onclick="togglePause()" title="Jeda Permainan (Esc / P)" class="px-3 h-10 bg-amber-400 hover:bg-amber-500 border-2 border-amber-600 text-white font-fredoka rounded-xl flex items-center justify-center space-x-1.5 shadow-sm transition active:scale-95">
+                    <i id="pause-icon" class="fa-solid fa-pause text-base"></i>
+                    <span class="hidden sm:inline text-sm tracking-wide">Jeda</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- 2. GAME SCREENS -->
+        <main class="flex-1 relative flex items-center justify-center p-4">
+
+            <!-- SCREEN 1: WELCOME & REGISTRATION SCREEN -->
+            <div id="screen-welcome" class="bg-white/95 backdrop-blur-md rounded-3xl p-6 sm:p-8 max-w-lg w-full shadow-2xl border-4 border-sky-300 text-center relative z-20 transform transition-all">
+                <div class="absolute -top-12 left-1/2 -translate-x-1/2 flex space-x-2">
+                    <div class="w-10 h-14 bg-red-500 rounded-full shadow-md animate-bounce" style="animation-delay: 0.1s"></div>
+                    <div class="w-12 h-16 bg-amber-400 rounded-full shadow-md animate-bounce" style="animation-delay: 0.3s"></div>
+                    <div class="w-10 h-14 bg-emerald-500 rounded-full shadow-md animate-bounce" style="animation-delay: 0.2s"></div>
+                </div>
+
+                <h1 class="font-fredoka text-3xl sm:text-4xl text-sky-600 mt-4 mb-2 tracking-wide">BALLOON POP!</h1>
+                <p class="font-bold text-amber-500 text-sm sm:text-base mb-6">Pecahkan Balon Pintar – Pengurangan SD Kelas 1</p>
+
+                <!-- Form Input -->
+                <div class="space-y-4 text-left">
+                    <div>
+                        <label class="block text-sky-800 font-bold mb-1 text-sm">Nama Lengkap Siswa:</label>
+                        <input type="text" id="player-name-input" placeholder="Masukkan namamu di sini..." class="w-full px-4 py-3 rounded-2xl border-2 border-sky-300 focus:border-amber-400 focus:outline-none text-sky-900 font-bold text-lg bg-sky-50 shadow-inner">
+                    </div>
+
+                    <!-- Input Mode Selector -->
+                    <div>
+                        <label class="block text-sky-800 font-bold mb-1 text-sm">Pilih Mode Kontrol Permaianan:</label>
+                        <div class="grid grid-cols-2 gap-3">
+                            <button type="button" id="mode-touch-btn" onclick="selectControlMode('touch')" class="border-2 border-amber-400 bg-amber-50 hover:bg-amber-100 text-amber-900 rounded-2xl p-3 text-center transition flex flex-col items-center justify-center space-y-1 shadow-sm">
+                                <i class="fa-solid fa-hand-pointer text-2xl text-amber-500"></i>
+                                <span class="font-bold text-sm">Klik / Sentuh</span>
+                                <span class="text-xs text-amber-700">Mouse atau Layar Sentuh</span>
+                            </button>
+                            <button type="button" id="mode-camera-btn" onclick="selectControlMode('camera')" class="border-2 border-slate-200 bg-slate-50 hover:bg-sky-50 text-slate-700 rounded-2xl p-3 text-center transition flex flex-col items-center justify-center space-y-1 shadow-sm">
+                                <i class="fa-solid fa-camera text-2xl text-sky-500"></i>
+                                <span class="font-bold text-sm">Kamera Hand Gesture</span>
+                                <span class="text-xs text-slate-500">Kamera Web + Pinch Jari</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Info Pinch Gesture -->
+                <div id="camera-instructions" class="hidden mt-4 p-3 bg-sky-50 rounded-2xl border border-sky-200 text-xs text-sky-800 text-left flex items-start space-x-2">
+                    <i class="fa-solid fa-circle-info text-sky-500 text-base mt-0.5"></i>
+                    <span><strong>Cara Main Kamera:</strong> Gerakkan telunjuk untuk mengarahkan kursor. Pertemukan <strong>Ibu Jari & Telunjuk (Pinch)</strong> untuk memecahkan balon!</span>
+                </div>
+
+                <!-- Start Game Button -->
+                <button onclick="startGame()" class="mt-6 w-full bg-gradient-to-r from-emerald-400 to-teal-500 hover:from-emerald-500 hover:to-teal-600 text-white font-fredoka text-xl py-4 rounded-2xl shadow-lg border-b-4 border-teal-700 transform active:scale-95 transition">
+                    <i class="fa-solid fa-play me-2"></i>MULAI BERMAIN!
+                </button>
+            </div>
+
+            <!-- SCREEN 2: MAIN GAME PLAY AREA -->
+            <div id="screen-gameplay" class="hidden w-full h-full relative overflow-hidden flex flex-col items-center">
+                
+                <!-- Question Display Banner -->
+                <div class="mt-2 z-20 w-full max-w-2xl px-4">
+                    <div class="bg-white/90 backdrop-blur-md border-4 border-amber-400 rounded-3xl p-4 text-center shadow-xl relative">
+                        <div class="absolute -top-3 left-4 bg-amber-400 text-white font-fredoka text-xs px-3 py-0.5 rounded-full uppercase shadow">
+                            <span id="question-category-tag">LOTS</span>
+                        </div>
+                        <div class="text-xs font-bold text-sky-600 uppercase tracking-wider mb-0.5" id="question-number-tag">Pertanyaan 1 dari 3</div>
+                        <div id="question-text" class="font-fredoka text-2xl sm:text-3xl text-sky-900 leading-snug">
+                            5 - 2 = ?
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Container area for floating balloons -->
+                <div id="balloons-container" class="w-full flex-1 relative overflow-hidden">
+                    <!-- Dynamic Balloons inserted by JS -->
+                </div>
+
+                <!-- Miniature Camera Preview PIP (If Camera Enabled) -->
+                <div id="camera-pip" class="hidden absolute bottom-3 right-3 z-30 w-32 h-24 bg-black rounded-2xl border-2 border-white overflow-hidden shadow-lg">
+                    <canvas id="pip-canvas" class="w-full h-full webcam-flip object-cover"></canvas>
+                    <div class="absolute top-1 left-1 bg-red-600 text-white text-[9px] px-1.5 py-0.5 rounded-full font-bold animate-pulse">
+                        CAM LIVE
+                    </div>
+                </div>
+
+                <!-- PAUSE OVERLAY MODAL -->
+                <div id="pause-modal" class="hidden fixed inset-0 z-50 bg-sky-950/60 backdrop-blur-sm flex items-center justify-center p-4 transition-opacity">
+                    <div class="bg-white/95 backdrop-blur-md rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-2xl border-4 border-amber-400 text-center transform transition-all">
+                        <div class="w-16 h-16 mx-auto bg-amber-100 border-4 border-amber-400 text-amber-500 rounded-full flex items-center justify-center text-3xl mb-3 shadow-inner">
+                            <i class="fa-solid fa-pause"></i>
+                        </div>
+                        <h2 class="font-fredoka text-2xl sm:text-3xl text-sky-800 mb-1">PERMAINAN DIJEDA</h2>
+                        <p class="text-sky-600 font-bold text-sm mb-5">Istirahat sebentar, yuk! Pilih menu di bawah ini:</p>
+
+                        <!-- Current Game Status Box -->
+                        <div class="bg-sky-50 rounded-2xl p-3 border-2 border-sky-200 mb-6 flex justify-around items-center">
+                            <div>
+                                <div class="text-xs font-bold text-sky-500 uppercase">Posisi Saat Ini</div>
+                                <div id="pause-status-level" class="font-fredoka text-sky-800 text-lg">Level 1 (1/3)</div>
+                            </div>
+                            <div class="h-8 w-0.5 bg-sky-200"></div>
+                            <div>
+                                <div class="text-xs font-bold text-amber-500 uppercase">Skor Sementara</div>
+                                <div id="pause-status-score" class="font-fredoka text-amber-600 text-xl">0</div>
+                            </div>
+                        </div>
+
+                        <!-- 3 Action Buttons -->
+                        <div class="space-y-3">
+                            <button onclick="resumeGame()" class="w-full bg-gradient-to-r from-emerald-400 to-teal-500 hover:from-emerald-500 hover:to-teal-600 text-white font-fredoka text-lg py-3.5 rounded-2xl shadow-md border-b-4 border-teal-700 active:scale-95 transition flex items-center justify-center space-x-2">
+                                <i class="fa-solid fa-play"></i>
+                                <span>Lanjutkan Permainan</span>
+                            </button>
+                            <button onclick="restartFromPause()" class="w-full bg-gradient-to-r from-amber-400 to-orange-500 hover:from-amber-500 hover:to-orange-600 text-white font-fredoka text-lg py-3.5 rounded-2xl shadow-md border-b-4 border-orange-700 active:scale-95 transition flex items-center justify-center space-x-2">
+                                <i class="fa-solid fa-rotate-right"></i>
+                                <span>Ulangi Permainan</span>
+                            </button>
+                            <button onclick="quitToMenu()" class="w-full bg-gradient-to-r from-rose-400 to-red-500 hover:from-rose-500 hover:to-red-600 text-white font-fredoka text-lg py-3.5 rounded-2xl shadow-md border-b-4 border-red-700 active:scale-95 transition flex items-center justify-center space-x-2">
+                                <i class="fa-solid fa-house"></i>
+                                <span>Keluar ke Menu Utama</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- SCREEN 3: END LEVEL / END GAME SUMMARY -->
+            <div id="screen-summary" class="hidden bg-white/95 backdrop-blur-md rounded-3xl p-6 sm:p-8 max-w-lg w-full shadow-2xl border-4 border-amber-300 text-center relative z-20 transform transition-all">
+                <div class="text-amber-400 text-5xl mb-2">
+                    <i class="fa-solid fa-trophy animate-bounce"></i>
+                </div>
+                <h2 id="summary-title" class="font-fredoka text-3xl text-sky-800">HEBAT BANGET!</h2>
+                <p id="summary-subtitle" class="text-sky-600 font-bold mb-4">Kamu telah menyelesaikan semua level!</p>
+
+                <!-- Star Rating Display -->
+                <div id="stars-container" class="flex justify-center space-x-2 text-4xl text-amber-400 mb-6">
+                    <i class="fa-solid fa-star"></i>
+                    <i class="fa-solid fa-star"></i>
+                    <i class="fa-solid fa-star"></i>
+                </div>
+
+                <!-- Stats Container -->
+                <div class="bg-sky-50 rounded-2xl p-4 border border-sky-200 mb-6 space-y-2 text-left">
+                    <div class="flex justify-between items-center border-b border-sky-100 pb-2">
+                        <span class="text-sky-700 font-bold">Nama Pemain:</span>
+                        <span id="summary-name" class="font-fredoka text-sky-900">Nama Siswa</span>
+                    </div>
+                    <div class="flex justify-between items-center border-b border-sky-100 pb-2">
+                        <span class="text-sky-700 font-bold">Total Skor:</span>
+                        <span id="summary-score" class="font-fredoka text-amber-600 text-xl">1500</span>
+                    </div>
+                    <div class="flex justify-between items-center border-b border-sky-100 pb-2">
+                        <span class="text-sky-700 font-bold">Waktu Selesai:</span>
+                        <span id="summary-time" class="font-fredoka text-rose-600 text-lg">00:00</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-sky-700 font-bold">Apresiasi Guru:</span>
+                        <span id="summary-feedback" class="font-bold text-emerald-600 text-sm">Luar Biasa! Matematikamu Sangat Hebat!</span>
+                    </div>
+                </div>
+
+                <!-- Action Buttons -->
+                <div class="flex space-x-3">
+                    <button onclick="restartGame()" class="flex-1 bg-gradient-to-r from-amber-400 to-orange-500 hover:from-amber-500 hover:to-orange-600 text-white font-fredoka text-lg py-3 rounded-2xl shadow-md border-b-4 border-orange-700 active:scale-95 transition">
+                        <i class="fa-solid fa-rotate-right me-1"></i> Main Lagi
+                    </button>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- AUDIO SYNTHESIS & GAME ENGINE LOGIC -->
+    <script>
+        /* ==========================================================================
+           1. QUESTION DATABASE (MATEMATIKA KELAS 1 SD - PENGURANGAN SAMPAI 10)
+           ========================================================================== */
+        const GAME_LEVELS = [
+            // LEVEL 1
+            {
+                level: 1,
+                questions: [
+                    { type: 'LOTS', question: '5 - 2 = ?', options: [3, 2, 4, 5], correct: 3 },
+                    { type: 'MOTS', question: 'Budi punya 4 kue, dimakan 1. Sisa kue Budi?', options: [2, 3, 5, 1], correct: 3 },
+                    { type: 'HOTS', question: 'Manakah yang hasilnya sama dengan 6 - 2 ?', options: ['4 - 0', '7 - 2', '5 - 3', '8 - 6'], correct: '4 - 0' }
+                ]
+            },
+            // LEVEL 2
+            {
+                level: 2,
+                questions: [
+                    { type: 'LOTS', question: '7 - 3 = ?', options: [4, 3, 5, 2], correct: 4 },
+                    { type: 'MOTS', question: 'Siti memetik 8 bunga, 4 diberikan ibu. Bunga Siti sekarang?', options: [3, 5, 4, 6], correct: 4 },
+                    { type: 'HOTS', question: '8 - ... = 5 . Angka yang tepat adalah?', options: [2, 3, 4, 1], correct: 3 }
+                ]
+            },
+            // LEVEL 3
+            {
+                level: 3,
+                questions: [
+                    { type: 'LOTS', question: '9 - 4 = ?', options: [6, 5, 4, 3], correct: 5 },
+                    { type: 'MOTS', question: 'Ada 6 burung di pohon, 3 terbang pergi. Berapa burung sisa?', options: [2, 4, 3, 1], correct: 3 },
+                    { type: 'HOTS', question: 'Bandingkan: 9 - 3  ...  8 - 2. Tanda yang cocok?', options: ['=', '>', '<', '+'], correct: '=' }
+                ]
+            },
+            // LEVEL 4
+            {
+                level: 4,
+                questions: [
+                    { type: 'LOTS', question: '10 - 6 = ?', options: [4, 5, 3, 6], correct: 4 },
+                    { type: 'MOTS', question: 'Doni membawa 10 balon, 5 balon meletus. Sisa balon Doni?', options: [6, 4, 5, 3], correct: 5 },
+                    { type: 'HOTS', question: '... - 4 = 4 . Berapa angka awal tersebut?', options: [7, 8, 9, 6], correct: 8 }
+                ]
+            },
+            // LEVEL 5
+            {
+                level: 5,
+                questions: [
+                    { type: 'LOTS', question: '10 - 7 = ?', options: [2, 3, 4, 5], correct: 3 },
+                    { type: 'MOTS', question: 'Ada 9 mobil di parkiran, 6 mobil keluar. Sisa mobil?', options: [2, 4, 3, 5], correct: 3 },
+                    { type: 'HOTS', question: 'Mana pengurangan yang hasilnya PALING KECIL?', options: ['9 - 8', '7 - 4', '5 - 1', '6 - 3'], correct: '9 - 8' }
+                ]
+            }
+        ];
+
+        // Color palettes for balloons (3D gradients)
+        const BALLOON_COLORS = [
+            { bg: '#ef4444', border: '#b91c1c' }, // Red
+            { bg: '#3b82f6', border: '#1d4ed8' }, // Blue
+            { bg: '#10b981', border: '#047857' }, // Green
+            { bg: '#f59e0b', border: '#b45309' }, // Amber
+            { bg: '#8b5cf6', border: '#6d28d9' }, // Purple
+            { bg: '#ec4899', border: '#be185d' }  // Pink
+        ];
+
+        /* ==========================================================================
+           2. SOUND ENGINE (WEB AUDIO API - NO EXTERNAL FILES NEEDED)
+           ========================================================================== */
+        class SoundEngine {
+            constructor() {
+                this.ctx = null;
+                this.isMuted = false;
+            }
+
+            init() {
+                if (!this.ctx) {
+                    const AudioContext = window.AudioContext || window.webkitAudioContext;
+                    this.ctx = new AudioContext();
+                }
+            }
+
+            // Pop Sound Effect (Balloon burst)
+            playPop() {
+                if (this.isMuted) return;
+                this.init();
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(400, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(80, this.ctx.currentTime + 0.08);
+
+                gain.gain.setValueAtTime(1, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.08);
+
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.08);
+            }
+
+            // Correct Answer Melody
+            playCorrect() {
+                if (this.isMuted) return;
+                this.init();
+                const notes = [523.25, 659.25, 783.99, 1046.50]; // C5, E5, G5, C6
+                notes.forEach((freq, idx) => {
+                    const osc = this.ctx.createOscillator();
+                    const gain = this.ctx.createGain();
+
+                    osc.type = 'triangle';
+                    osc.frequency.setValueAtTime(freq, this.ctx.currentTime + idx * 0.08);
+
+                    gain.gain.setValueAtTime(0.3, this.ctx.currentTime + idx * 0.08);
+                    gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + idx * 0.08 + 0.2);
+
+                    osc.connect(gain);
+                    gain.connect(this.ctx.destination);
+
+                    osc.start(this.ctx.currentTime + idx * 0.08);
+                    osc.stop(this.ctx.currentTime + idx * 0.08 + 0.2);
+                });
+            }
+
+            // Wrong Answer Buzz
+            playWrong() {
+                if (this.isMuted) return;
+                this.init();
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(180, this.ctx.currentTime);
+                osc.frequency.linearRampToValueAtTime(110, this.ctx.currentTime + 0.25);
+
+                gain.gain.setValueAtTime(0.4, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.25);
+
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.25);
+            }
+
+            // Fanfare / Cheer for Win
+            playVictory() {
+                if (this.isMuted) return;
+                this.init();
+                const melody = [440, 554.37, 659.25, 880];
+                melody.forEach((freq, i) => {
+                    const osc = this.ctx.createOscillator();
+                    const gain = this.ctx.createGain();
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(freq, this.ctx.currentTime + i * 0.12);
+                    gain.gain.setValueAtTime(0.4, this.ctx.currentTime + i * 0.12);
+                    gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + i * 0.12 + 0.4);
+                    osc.connect(gain);
+                    gain.connect(this.ctx.destination);
+                    osc.start(this.ctx.currentTime + i * 0.12);
+                    osc.stop(this.ctx.currentTime + i * 0.12 + 0.4);
+                });
+            }
+        }
+
+        const soundEngine = new SoundEngine();
+
+        /* ==========================================================================
+           3. GAME STATE MANAGEMENT
+           ========================================================================== */
+        let state = {
+            playerName: "Siswa",
+            controlMode: "touch", // 'touch' or 'camera'
+            currentLevelIdx: 0,
+            currentQuestionIdx: 0,
+            score: 0,
+            timerSeconds: 0,
+            timerInterval: null,
+            balloons: [],
+            isProcessingAnswer: false,
+            isPaused: false,
+            cameraActive: false
+        };
+
+        // MediaPipe & Camera References
+        let handsDetector = null;
+        let cameraUtils = null;
+        let lastPinchState = false;
+        let activeVideoStream = null;
+
+        /* ==========================================================================
+           4. DOM ELEMENTS & INITIALIZATION
+           ========================================================================== */
+        const screens = {
+            welcome: document.getElementById('screen-welcome'),
+            gameplay: document.getElementById('screen-gameplay'),
+            summary: document.getElementById('screen-summary')
+        };
+
+        const navbar = document.getElementById('navbar');
+        const handPointer = document.getElementById('hand-pointer');
+        const pointerInner = document.getElementById('pointer-inner');
+        const pauseModal = document.getElementById('pause-modal');
+
+        // Keyboard Shortcut for Pause (Escape or P)
+        window.addEventListener('keydown', (e) => {
+            if (screens.gameplay.classList.contains('hidden')) return;
+            if (e.key === 'Escape' || e.key.toLowerCase() === 'p') {
+                e.preventDefault();
+                togglePause();
+            }
+        });
+
+        function togglePause() {
+            if (screens.gameplay.classList.contains('hidden')) return;
+            if (state.isPaused) {
+                resumeGame();
+            } else {
+                pauseGame();
+            }
+        }
+
+        function pauseGame() {
+            if (state.isPaused) return;
+            state.isPaused = true;
+
+            // Update Pause Modal Info
+            const currentLevel = GAME_LEVELS[state.currentLevelIdx].level;
+            document.getElementById('pause-status-level').innerText = `Level ${currentLevel} (${state.currentQuestionIdx + 1}/3)`;
+            document.getElementById('pause-status-score').innerText = state.score;
+
+            // Pause CSS animations on balloons
+            document.querySelectorAll('.balloon').forEach(el => {
+                el.style.animationPlayState = 'paused';
+            });
+
+            // Update Navbar Pause Button Icon
+            document.getElementById('pause-icon').className = "fa-solid fa-play text-base";
+
+            // Show Pause Overlay
+            pauseModal.classList.remove('hidden');
+        }
+
+        function resumeGame() {
+            if (!state.isPaused) return;
+            state.isPaused = false;
+
+            // Resume CSS animations on balloons
+            document.querySelectorAll('.balloon').forEach(el => {
+                el.style.animationPlayState = 'running';
+            });
+
+            // Restore Navbar Pause Button Icon
+            document.getElementById('pause-icon').className = "fa-solid fa-pause text-base";
+
+            // Hide Pause Overlay
+            pauseModal.classList.add('hidden');
+        }
+
+        function restartFromPause() {
+            // Reset pause state & UI
+            state.isPaused = false;
+            pauseModal.classList.add('hidden');
+            document.getElementById('pause-icon').className = "fa-solid fa-pause text-base";
+
+            // Reset progress & restart from Level 1 Question 1 with same player name
+            state.currentLevelIdx = 0;
+            state.currentQuestionIdx = 0;
+            state.score = 0;
+            updateScoreUI();
+            startTimer();
+            loadQuestion();
+        }
+
+        function stopCameraStream() {
+            const videoElement = document.getElementById('webcam-input');
+            const cameraPip = document.getElementById('camera-pip');
+            if (cameraUtils) {
+                try { cameraUtils.stop(); } catch (e) {}
+                cameraUtils = null;
+            }
+            if (videoElement && videoElement.srcObject) {
+                const tracks = videoElement.srcObject.getTracks();
+                tracks.forEach(track => track.stop());
+                videoElement.srcObject = null;
+            }
+            state.cameraActive = false;
+            cameraPip.classList.add('hidden');
+            handPointer.classList.add('hidden');
+        }
+
+        function quitToMenu() {
+            // Reset pause state & timer
+            state.isPaused = false;
+            clearInterval(state.timerInterval);
+            pauseModal.classList.add('hidden');
+            document.getElementById('pause-icon').className = "fa-solid fa-pause text-base";
+
+            // Stop camera if active
+            stopCameraStream();
+
+            // Clear balloons
+            document.getElementById('balloons-container').innerHTML = '';
+            state.balloons = [];
+
+            // Return to Welcome Screen
+            screens.gameplay.classList.add('hidden');
+            screens.summary.classList.add('hidden');
+            navbar.classList.add('hidden');
+            screens.welcome.classList.remove('hidden');
+        }
+
+        function selectControlMode(mode) {
+            state.controlMode = mode;
+            const touchBtn = document.getElementById('mode-touch-btn');
+            const cameraBtn = document.getElementById('mode-camera-btn');
+            const cameraInfo = document.getElementById('camera-instructions');
+
+            if (mode === 'touch') {
+                touchBtn.className = "border-2 border-amber-400 bg-amber-50 hover:bg-amber-100 text-amber-900 rounded-2xl p-3 text-center transition flex flex-col items-center justify-center space-y-1 shadow-sm";
+                cameraBtn.className = "border-2 border-slate-200 bg-slate-50 hover:bg-sky-50 text-slate-700 rounded-2xl p-3 text-center transition flex flex-col items-center justify-center space-y-1 shadow-sm";
+                cameraInfo.classList.add('hidden');
+            } else {
+                cameraBtn.className = "border-2 border-amber-400 bg-amber-50 hover:bg-amber-100 text-amber-900 rounded-2xl p-3 text-center transition flex flex-col items-center justify-center space-y-1 shadow-sm";
+                touchBtn.className = "border-2 border-slate-200 bg-slate-50 hover:bg-sky-50 text-slate-700 rounded-2xl p-3 text-center transition flex flex-col items-center justify-center space-y-1 shadow-sm";
+                cameraInfo.classList.remove('hidden');
+            }
+        }
+
+        function toggleSound() {
+            soundEngine.isMuted = !soundEngine.isMuted;
+            const icon = document.getElementById('sound-icon');
+            if (soundEngine.isMuted) {
+                icon.className = "fa-solid fa-volume-xmark text-lg text-rose-500";
+            } else {
+                icon.className = "fa-solid fa-volume-high text-lg text-sky-700";
+            }
+        }
+
+        function startGame() {
+            const nameInput = document.getElementById('player-name-input').value.trim();
+            if (nameInput) {
+                state.playerName = nameInput;
+            } else {
+                state.playerName = "Siswa";
+            }
+            document.getElementById('nav-player-name').innerText = state.playerName;
+
+            soundEngine.init();
+            state.isPaused = false;
+            pauseModal.classList.add('hidden');
+            document.getElementById('pause-icon').className = "fa-solid fa-pause text-base";
+
+            // Switch Screen
+            screens.welcome.classList.add('hidden');
+            screens.gameplay.classList.remove('hidden');
+            navbar.classList.remove('hidden');
+
+            // Initialize Camera if chosen
+            if (state.controlMode === 'camera') {
+                initMediaPipeCamera();
+                handPointer.classList.remove('hidden');
+            } else {
+                stopCameraStream();
+                handPointer.classList.add('hidden');
+            }
+
+            // Start Timer
+            startTimer();
+
+            // Load Level 1 Question 1
+            state.currentLevelIdx = 0;
+            state.currentQuestionIdx = 0;
+            state.score = 0;
+            updateScoreUI();
+            loadQuestion();
+        }
+
+        function startTimer() {
+            state.timerSeconds = 0;
+            document.getElementById('nav-timer').innerText = "00:00";
+            clearInterval(state.timerInterval);
+            state.timerInterval = setInterval(() => {
+                if (state.isPaused) return;
+                state.timerSeconds++;
+                const mins = Math.floor(state.timerSeconds / 60).toString().padStart(2, '0');
+                const secs = (state.timerSeconds % 60).toString().padStart(2, '0');
+                document.getElementById('nav-timer').innerText = `${mins}:${secs}`;
+            }, 1000);
+        }
+
+        /* ==========================================================================
+           5. GAMEPLAY LOGIC & BALLOON SPAWNING
+           ========================================================================== */
+        function loadQuestion() {
+            state.isProcessingAnswer = false;
+            const currentLevel = GAME_LEVELS[state.currentLevelIdx];
+            const qData = currentLevel.questions[state.currentQuestionIdx];
+
+            // Update UI Tags
+            document.getElementById('nav-level-tag').innerText = `Level ${currentLevel.level}`;
+            document.getElementById('question-category-tag').innerText = qData.type;
+            document.getElementById('question-number-tag').innerText = `Pertanyaan ${state.currentQuestionIdx + 1} dari 3`;
+            document.getElementById('question-text').innerText = qData.question;
+            document.getElementById('progress-label').innerText = `Kemajuan Level: ${state.currentQuestionIdx + 1} / 3`;
+            
+            const progressPercent = ((state.currentQuestionIdx + 1) / 3) * 100;
+            document.getElementById('level-progress-bar').style.width = `${progressPercent}%`;
+
+            // Clear existing balloons
+            const container = document.getElementById('balloons-container');
+            container.innerHTML = '';
+            state.balloons = [];
+
+            // Render Balloons
+            const containerWidth = container.clientWidth || window.innerWidth;
+            const containerHeight = container.clientHeight || (window.innerHeight - 180);
+
+            // Calculate spacing for options
+            const numOptions = qData.options.length;
+            const colWidth = containerWidth / numOptions;
+
+            qData.options.forEach((optionValue, idx) => {
+                const colorObj = BALLOON_COLORS[idx % BALLOON_COLORS.length];
+                
+                // Balloon wrapper div
+                const wrapper = document.createElement('div');
+                wrapper.className = 'balloon-wrapper';
+                
+                // Random position within column
+                const posX = (idx * colWidth) + (colWidth / 2) - 55 + (Math.random() * 20 - 10);
+                const posY = containerHeight - 160 - (Math.random() * 60);
+
+                wrapper.style.left = `${Math.max(10, Math.min(containerWidth - 120, posX))}px`;
+                wrapper.style.top = `${Math.max(20, posY)}px`;
+
+                // Balloon visual element
+                const balloon = document.createElement('div');
+                balloon.className = 'balloon';
+                balloon.style.backgroundColor = colorObj.bg;
+                balloon.style.color = '#ffffff';
+
+                // Inner Answer Text
+                const text = document.createElement('span');
+                text.className = 'font-fredoka text-2xl sm:text-3xl drop-shadow-md select-none pointer-events-none';
+                text.innerText = optionValue;
+
+                // String element
+                const stringEl = document.createElement('div');
+                stringEl.className = 'balloon-string';
+
+                balloon.appendChild(text);
+                wrapper.appendChild(balloon);
+                wrapper.appendChild(stringEl);
+
+                // Add Click / Touch event
+                wrapper.addEventListener('pointerdown', (e) => {
+                    e.preventDefault();
+                    handleBalloonPop(wrapper, optionValue, qData.correct);
+                });
+
+                container.appendChild(wrapper);
+
+                // Float animation data
+                state.balloons.push({
+                    element: wrapper,
+                    value: optionValue,
+                    x: posX,
+                    y: posY,
+                    baseY: posY,
+                    speedY: 0.5 + Math.random() * 0.8,
+                    floatOffset: Math.random() * 100
+                });
+            });
+        }
+
+        // Floating Physics Animation Frame Loop
+        function animateBalloons() {
+            if (!screens.gameplay.classList.contains('hidden') && !state.isPaused) {
+                const container = document.getElementById('balloons-container');
+                const containerHeight = container.clientHeight || 400;
+
+                state.balloons.forEach(b => {
+                    if (b.element && b.element.parentNode) {
+                        b.y -= b.speedY;
+                        // Oscillate slightly left and right
+                        const floatX = Math.sin((Date.now() / 400) + b.floatOffset) * 1.5;
+                        
+                        // Respawn to bottom if floats off top
+                        if (b.y < -140) {
+                            b.y = containerHeight + 20;
+                        }
+
+                        b.element.style.top = `${b.y}px`;
+                        b.element.style.transform = `translateX(${floatX}px)`;
+                    }
+                });
+            }
+            requestAnimationFrame(animateBalloons);
+        }
+        requestAnimationFrame(animateBalloons);
+
+        /* ==========================================================================
+           6. ANSWER EVALUATION & EFEK PECAH
+           ========================================================================== */
+        function handleBalloonPop(wrapperEl, selectedVal, correctVal) {
+            if (state.isProcessingAnswer || state.isPaused) return;
+
+            if (selectedVal === correctVal) {
+                // CORRECT ANSWER!
+                state.isProcessingAnswer = true;
+                soundEngine.playPop();
+                soundEngine.playCorrect();
+
+                // Get Balloon Center for Particles
+                const rect = wrapperEl.getBoundingClientRect();
+                const centerX = rect.left + rect.width / 2;
+                const centerY = rect.top + rect.height / 2;
+
+                spawnParticlePop(centerX, centerY);
+
+                // Add score
+                state.score += 100;
+                updateScoreUI();
+
+                // Pop Animation (Scale out)
+                wrapperEl.style.transform = "scale(1.4)";
+                wrapperEl.style.opacity = "0";
+                wrapperEl.style.transition = "all 0.15s ease-out";
+
+                setTimeout(() => {
+                    state.currentQuestionIdx++;
+                    if (state.currentQuestionIdx >= 3) {
+                        // Level Completed!
+                        state.currentLevelIdx++;
+                        if (state.currentLevelIdx >= GAME_LEVELS.length) {
+                            // Game Finished!
+                            showEndGameSummary();
+                        } else {
+                            // Next Level
+                            state.currentQuestionIdx = 0;
+                            loadQuestion();
+                        }
+                    } else {
+                        // Next Question
+                        loadQuestion();
+                    }
+                }, 600);
+
+            } else {
+                // WRONG ANSWER
+                soundEngine.playWrong();
+                // Shake balloon
+                wrapperEl.classList.add('shake');
+                setTimeout(() => {
+                    wrapperEl.classList.remove('shake');
+                }, 500);
+
+                // Subtract small penalty if score > 0
+                if (state.score >= 10) state.score -= 10;
+                updateScoreUI();
+            }
+        }
+
+        function updateScoreUI() {
+            document.getElementById('nav-score').innerText = state.score;
+        }
+
+        /* ==========================================================================
+           7. CANVA PARTICLE POP EFEK
+           ========================================================================== */
+        const canvas = document.getElementById('effects-canvas');
+        const ctx = canvas.getContext('2d');
+        let particles = [];
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        function spawnParticlePop(x, y) {
+            const colors = ['#f43f5e', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#ffffff'];
+            for (let i = 0; i < 30; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const speed = 3 + Math.random() * 7;
+                particles.push({
+                    x: x,
+                    y: y,
+                    vx: Math.cos(angle) * speed,
+                    vy: Math.sin(angle) * speed,
+                    radius: 4 + Math.random() * 6,
+                    color: colors[Math.floor(Math.random() * colors.length)],
+                    alpha: 1,
+                    decay: 0.02 + Math.random() * 0.02
+                });
+            }
+        }
+
+        function renderParticles() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.x += p.vx;
+                p.y += p.vy;
+                p.vy += 0.15; // Gravity
+                p.alpha -= p.decay;
+
+                if (p.alpha <= 0) {
+                    particles.splice(i, 1);
+                    continue;
+                }
+
+                ctx.save();
+                ctx.globalAlpha = p.alpha;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+                ctx.fillStyle = p.color;
+                ctx.fill();
+                ctx.restore();
+            }
+            requestAnimationFrame(renderParticles);
+        }
+        requestAnimationFrame(renderParticles);
+
+        /* ==========================================================================
+           8. MEDIAPIPE HANDS GESTURE RECOGNITION (PINCH DETECTOR)
+           ========================================================================== */
+        function initMediaPipeCamera() {
+            const videoElement = document.getElementById('webcam-input');
+            const pipCanvas = document.getElementById('pip-canvas');
+            const pipCtx = pipCanvas.getContext('2d');
+            const cameraPip = document.getElementById('camera-pip');
+
+            cameraPip.classList.remove('hidden');
+
+            handsDetector = new Hands({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+            });
+
+            handsDetector.setOptions({
+                maxNumHands: 1,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.6,
+                minTrackingConfidence: 0.6
+            });
+
+            handsDetector.onResults((results) => {
+                // Draw PIP Feed
+                pipCtx.save();
+                pipCtx.clearRect(0, 0, pipCanvas.width, pipCanvas.height);
+                pipCtx.drawImage(results.image, 0, 0, pipCanvas.width, pipCanvas.height);
+                pipCtx.restore();
+
+                if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                    const landmarks = results.multiHandLandmarks[0];
+
+                    // Index Finger Tip (Landmark 8) & Thumb Tip (Landmark 4)
+                    const indexTip = landmarks[8];
+                    const thumbTip = landmarks[4];
+
+                    // Convert Normalized Coordinates to Screen Pixel Coordinates (Mirrored X)
+                    const screenX = (1 - indexTip.x) * window.innerWidth;
+                    const screenY = indexTip.y * window.innerHeight;
+
+                    // Update Hand Pointer Position
+                    handPointer.style.left = `${screenX}px`;
+                    handPointer.style.top = `${screenY}px`;
+
+                    // Calculate Distance between Index Tip & Thumb Tip for Pinch Gesture
+                    const dx = (indexTip.x - thumbTip.x);
+                    const dy = (indexTip.y - thumbTip.y);
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+
+                    // Threshold for Pinch (typically < 0.06 normalized distance)
+                    const isPinching = distance < 0.065;
+
+                    if (isPinching) {
+                        pointerInner.className = "w-5 h-5 bg-emerald-500 rounded-full animate-ping";
+                        if (!lastPinchState && !state.isPaused) {
+                            // Pinch Started Event -> Trigger Hit Test
+                            triggerPinchPopAt(screenX, screenY);
+                        }
+                        lastPinchState = true;
+                    } else {
+                        pointerInner.className = "w-3 h-3 bg-red-600 rounded-full";
+                        lastPinchState = false;
+                    }
+                }
+            });
+
+            cameraUtils = new Camera(videoElement, {
+                onFrame: async () => {
+                    if (handsDetector) {
+                        await handsDetector.send({ image: videoElement });
+                    }
+                },
+                width: 320,
+                height: 240
+            });
+            cameraUtils.start();
+            state.cameraActive = true;
+        }
+
+        // Hit Test for Pinch Gesture on Floating Balloons
+        function triggerPinchPopAt(x, y) {
+            if (screens.gameplay.classList.contains('hidden') || state.isPaused) return;
+
+            state.balloons.forEach(b => {
+                if (b.element && b.element.parentNode) {
+                    const rect = b.element.getBoundingClientRect();
+                    // Add buffer around balloon for easier hit detection
+                    if (x >= rect.left - 15 && x <= rect.right + 15 &&
+                        y >= rect.top - 15 && y <= rect.bottom + 15) {
+                        const qData = GAME_LEVELS[state.currentLevelIdx].questions[state.currentQuestionIdx];
+                        handleBalloonPop(b.element, b.value, qData.correct);
+                    }
+                }
+            });
+        }
+
+        /* ==========================================================================
+           9. GAME OVER & SUMMARY SCREEN
+           ========================================================================== */
+        function showEndGameSummary() {
+            clearInterval(state.timerInterval);
+            soundEngine.playVictory();
+
+            screens.gameplay.classList.add('hidden');
+            screens.summary.classList.remove('hidden');
+
+            document.getElementById('summary-name').innerText = state.playerName;
+            document.getElementById('summary-score').innerText = state.score;
+            document.getElementById('summary-time').innerText = document.getElementById('nav-timer').innerText;
+
+            // Star Calculation (Max Score = 1500)
+            const starsContainer = document.getElementById('stars-container');
+            const feedbackText = document.getElementById('summary-feedback');
+
+            let starsHTML = '';
+            if (state.score >= 1300) {
+                starsHTML = '<i class="fa-solid fa-star text-amber-400"></i><i class="fa-solid fa-star text-amber-400"></i><i class="fa-solid fa-star text-amber-400"></i>';
+                feedbackText.innerText = "Luar Biasa! Kamu Jenius Pengurangan!";
+            } else if (state.score >= 900) {
+                starsHTML = '<i class="fa-solid fa-star text-amber-400"></i><i class="fa-solid fa-star text-amber-400"></i><i class="fa-regular fa-star text-slate-300"></i>';
+                feedbackText.innerText = "Sangat Bagus! Teruskan Berlatih!";
+            } else {
+                starsHTML = '<i class="fa-solid fa-star text-amber-400"></i><i class="fa-regular fa-star text-slate-300"></i><i class="fa-regular fa-star text-slate-300"></i>';
+                feedbackText.innerText = "Bagus! Coba Lagi Untuk Nilai Sempurna!";
+            }
+            starsContainer.innerHTML = starsHTML;
+        }
+
+        function restartGame() {
+            screens.summary.classList.add('hidden');
+            screens.welcome.classList.remove('hidden');
+            navbar.classList.add('hidden');
+            handPointer.classList.add('hidden');
+
+            if (state.cameraActive && cameraUtils) {
+                // Keep camera instance running for next attempt if active
+            }
+        }
+    </script>
+</body>
+</html>
